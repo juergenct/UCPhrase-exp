@@ -12,15 +12,17 @@ from pathlib import Path
 from termcolor import colored
 from functools import lru_cache
 from nltk.stem.snowball import SnowballStemmer
+from nltk.stem import WordNetLemmatizer
 
 PUNCS = set(string.punctuation) - {'-'}
 STEMMER = SnowballStemmer('porter', ignore_stopwords=False)
+LEMMATIZER = WordNetLemmatizer()
 
 
 @lru_cache(maxsize=100000)
 def stem_word(w):
-    return STEMMER.stem(w)
-
+    # return STEMMER.stem(w)
+    return LEMMATIZER.lemmatize(w) # Lemmatize words instead of stemming!! - Own Code!!
 
 def stem_cand(c):
     return ' '.join([stem_word(w) for w in c.split()]).lower()
@@ -50,7 +52,6 @@ def get_possible_spans(word_idxs, num_wordpieces, max_word_gram, max_subword_gra
                 possible_spans.append((l_idx, r_idx))
     return possible_spans
 
-
 class Log:
     @staticmethod
     def info(message):
@@ -78,6 +79,19 @@ class IO:
     def dump(data, path):
         raise NotImplementedError
 
+    # def append_pickle(data, path_output):
+    #     # 1) Load old data (if any):
+    #     old_data = []
+    #     if path_output.exists():
+    #         with open(path_output, 'rb') as f:
+    #             old_data = pickle.load(f)
+
+    #     # 2) Extend old data with new data:
+    #     old_data.extend(data)
+
+    #     # 3) Dump combined data back to the file:
+    #     with open(path_output, 'wb') as f:
+    #         pickle.dump(old_data, f)
 
 # class Json(IO):
 #     @staticmethod

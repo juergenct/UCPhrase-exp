@@ -40,7 +40,7 @@ class Experiment:
             use_cache=True
         )
 
-        # annotator (supervision)
+        # annotator (supervision) # Core annotator is used with CNN model, Wiki annotator is used with emb model --> Core annotator
         self.train_annotator: BaseAnnotator = {
             'wiki': WikiAnnotator(
                 use_cache=True,
@@ -56,7 +56,7 @@ class Experiment:
         # model
         model_prefix = '.' + ARGS.model_prefix if ARGS.model_prefix else ''
         model_dir = self.dir_exp / f'model{model_prefix}'
-        if self.config['model'] == 'CNN':
+        if self.config['model'] == 'CNN': # Standard is to use the CNN model!
             model = model_att.AttmapModel(
                 model_dir=model_dir,
                 max_num_subwords=consts.MAX_SUBWORD_GRAM,
@@ -92,16 +92,16 @@ class Experiment:
 
     def predict(self, epoch, for_tagging=False):
         test_preprocessor = None
-        if for_tagging:
-            test_preprocessor = Preprocessor(
-                path_corpus=self.data_config.path_tagging_docs,
-                num_cores=consts.NUM_CORES,
-                use_cache=True)
-        else:
-            test_preprocessor = Preprocessor(
-                path_corpus=self.data_config.path_test,
-                num_cores=consts.NUM_CORES,
-                use_cache=True)
+        # if for_tagging:
+        #     test_preprocessor = Preprocessor(
+        #         path_corpus=self.data_config.path_tagging_docs,
+        #         num_cores=consts.NUM_CORES,
+        #         use_cache=True)
+        # else:
+        test_preprocessor = Preprocessor(
+            path_corpus=self.data_config.path_test,
+            num_cores=consts.NUM_CORES,
+            use_cache=True)
 
         test_preprocessor.tokenize_corpus()
 
@@ -120,34 +120,34 @@ class Experiment:
         dir_decoded = self.trainer.output_dir / f'{dir_prefix}decoded.epoch-{epoch}'
         dir_decoded.mkdir(exist_ok=True)
 
-        if for_tagging:
-            path_decoded_doc2sents = model_base.BaseModel.decode(
-                path_predicted_docs=path_predicted_docs,
-                output_dir=dir_decoded,
-                threshold=self.config['threshold'],
-                use_cache=True,
-                use_tqdm=True
-            )
-            evaluator = evaluate.SentEvaluator()
-            paths_gold = self.data_config.paths_tagging_human
-            print(f'Evaluate {path_decoded_doc2sents}')
-            print(evaluator.evaluate(path_decoded_doc2sents, paths_doc2golds=paths_gold))
-        else:
-            path_decoded_doc2cands = model_base.BaseModel.get_doc2cands(
-                path_predicted_docs=path_predicted_docs,
-                output_dir=dir_decoded,
-                expected_num_cands_per_doc=self.data_config.kp_num_candidates_per_doc,
-                use_cache=True,
-                use_tqdm=True
-            )
-            evaluator = evaluate.Evaluator()
-            print(f'Evaluate {path_decoded_doc2cands}')
-            print(evaluator.evaluate(path_doc2cands=path_decoded_doc2cands))
+        # if for_tagging:
+        #     path_decoded_doc2sents = model_base.BaseModel.decode(
+        #         path_predicted_docs=path_predicted_docs,
+        #         output_dir=dir_decoded,
+        #         threshold=self.config['threshold'],
+        #         use_cache=True,
+        #         use_tqdm=True
+        #     )
+        #     evaluator = evaluate.SentEvaluator()
+        #     paths_gold = self.data_config.paths_tagging_human
+        #     print(f'Evaluate {path_decoded_doc2sents}')
+        #     print(evaluator.evaluate(path_decoded_doc2sents, paths_doc2golds=paths_gold))
+        # else:
+        path_decoded_doc2cands = model_base.BaseModel.get_doc2cands(
+            path_predicted_docs=path_predicted_docs,
+            output_dir=dir_decoded,
+            expected_num_cands_per_doc=self.data_config.kp_num_candidates_per_doc,
+            use_cache=True,
+            use_tqdm=True
+        )
+        # evaluator = evaluate.Evaluator()
+        # print(f'Evaluate {path_decoded_doc2cands}')
+        # print(evaluator.evaluate(path_doc2cands=path_decoded_doc2cands))
 
 
 if __name__ == '__main__':
     exp = Experiment()
     exp.train()
     best_epoch = exp.select_best_epoch()
-    exp.predict(epoch=best_epoch, for_tagging=True)
+    # exp.predict(epoch=best_epoch, for_tagging=True)
     exp.predict(epoch=best_epoch, for_tagging=False)

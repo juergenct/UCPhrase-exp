@@ -1,6 +1,7 @@
 import utils
 import torch
 import consts
+import random
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
@@ -42,53 +43,192 @@ class FeatureExtractor(BaseFeatureExtractor):
         attention_output = model_output_dict
         return attention_output[:, :, l: r + 1, l: r + 1].copy()
 
+    # def generate_train_instances(self, path_sampled_docs, max_num_docs=None):
+    #     utils.Log.info(f'Generating training instances: {path_sampled_docs}')
+    #     path_sampled_docs = Path(path_sampled_docs)
+    #     path_prefix = 'train.' + f'{max_num_docs}docs.' * (max_num_docs is not None)
+    #     path_output = (self.output_dir / path_sampled_docs.name.replace('sampled.', path_prefix)).with_suffix('.pk')
+    #     if self.use_cache and utils.IO.is_valid_file(path_output):
+    #         print(f'[Feature] Use cache: {path_output}')
+    #         return path_output
+
+    #     print(f'Loading: {path_sampled_docs}...', end='')
+    #     sampled_docs = utils.OrJsonLine.load(path_sampled_docs)
+    #     sampled_docs = sampled_docs[:max_num_docs] if max_num_docs is not None else sampled_docs
+    #     print('OK!')
+    #     marked_sents = [sent for doc in sampled_docs for sent in doc['sents']]
+    #     marked_sents = sorted(marked_sents, key=lambda s: len(s['ids']), reverse=True)
+    #     model_outputs = self._get_model_outputs(marked_sents)
+
+    #     train_instances = []
+    #     for i, model_output_dict in tqdm(enumerate(model_outputs), ncols=100, total=len(marked_sents), desc='[Feature] Generate train instances'):
+    #         marked_sent = marked_sents[i]
+    #         word_idxs = marked_sent['widxs']
+    #         swidx2widx = {swidx: widx for widx, swidx in enumerate(word_idxs)}
+    #         swidx2widx.update({len(marked_sent['ids']): len(swidx2widx)})
+
+    #         for l_idx, r_idx in marked_sent['pos_spans']:
+    #             wl_idx, wr_idx = swidx2widx[l_idx], swidx2widx[r_idx + 1] - 1
+    #             spanlen = wr_idx - wl_idx + 1
+    #             if spanlen > consts.MAX_WORD_GRAM:
+    #                 continue
+    #             assert spanlen > 0
+
+    #             positive_span_attentionmap = self._get_span_attenionmap(model_output_dict, l_idx, r_idx)
+    #             positive_instance = (1, spanlen, positive_span_attentionmap, marked_sent['ids'][l_idx: r_idx + 1])
+    #             train_instances.append(positive_instance)
+
+    #         for negative_l_idx, negative_r_idx in marked_sent['neg_spans']:
+    #             negative_wl_idx, negative_wr_idx = swidx2widx[negative_l_idx], swidx2widx[negative_r_idx + 1] - 1
+    #             negative_spanlen = negative_wr_idx - negative_wl_idx + 1
+    #             negative_span_attentionmap = self._get_span_attenionmap(model_output_dict, negative_l_idx, negative_r_idx)
+    #             negative_instance = (0, negative_spanlen, negative_span_attentionmap, marked_sent['ids'][negative_l_idx: negative_r_idx + 1])
+    #             train_instances.append(negative_instance)
+
+    #         del model_output_dict
+
+    #     utils.Pickle.dump(train_instances, path_output)
+    #     return path_output
     def generate_train_instances(self, path_sampled_docs, max_num_docs=None):
+        # ---------------------------        
+        # Desired final numbers
+        POS_TARGET = 2_500_000
+        NEG_TARGET = 2_500_000
+        
         utils.Log.info(f'Generating training instances: {path_sampled_docs}')
         path_sampled_docs = Path(path_sampled_docs)
         path_prefix = 'train.' + f'{max_num_docs}docs.' * (max_num_docs is not None)
-        path_output = (self.output_dir / path_sampled_docs.name.replace('sampled.', path_prefix)).with_suffix('.pk')
+        path_output = (
+            self.output_dir
+            / path_sampled_docs.name.replace('sampled.', path_prefix)
+        ).with_suffix('.pk')
+
+        # Use cache if available
         if self.use_cache and utils.IO.is_valid_file(path_output):
             print(f'[Feature] Use cache: {path_output}')
             return path_output
 
+        # ---------------------------
+        # 1) Load and Flatten
+        # ---------------------------
         print(f'Loading: {path_sampled_docs}...', end='')
         sampled_docs = utils.OrJsonLine.load(path_sampled_docs)
-        sampled_docs = sampled_docs[:max_num_docs] if max_num_docs is not None else sampled_docs
+        if max_num_docs is not None:
+            sampled_docs = sampled_docs[:max_num_docs]
         print('OK!')
+
+        # Flatten out the sentences
         marked_sents = [sent for doc in sampled_docs for sent in doc['sents']]
+        print(f"Total sentences available: {len(marked_sents):,}")
+
+        # ---------------------------
+        # 2) Shuffle and Subset Sentences
+        # ---------------------------
+        random.shuffle(marked_sents)
+
+        # We might not need all sentences if we only want 5M total instances.
+        # But we don't know how many each sentence will produce.
+        # Strategy: pick a subset that is "likely" to yield enough.
+        # E.g., pick top X% or a specific number of sents if you have a sense of yield.
+        # Here's a simple example: take at most 2 million sentences.
+        # Adjust as needed.
+        max_sents_for_processing = 2_000_000  # or some other cutoff
+        if len(marked_sents) > max_sents_for_processing:
+            marked_sents = marked_sents[:max_sents_for_processing]
+        print(f"Subsampled to {len(marked_sents):,} sentences (pre-process).")
+
+        # Sort sentences by length (descending) if desired (optional step).
+        # If you still want the sort-by-length property, do it now or skip it
         marked_sents = sorted(marked_sents, key=lambda s: len(s['ids']), reverse=True)
+
+        # ---------------------------
+        # 3) Obtain Model Outputs
+        # ---------------------------
+        # We process only the (sub)sampled sentences
         model_outputs = self._get_model_outputs(marked_sents)
 
-        train_instances = []
-        for i, model_output_dict in tqdm(enumerate(model_outputs), ncols=100, total=len(marked_sents), desc='[Feature] Generate train instances'):
+        # ---------------------------
+        # 4) Generate Pos/Neg Instances
+        # ---------------------------
+        positive_instances = []
+        negative_instances = []
+
+        for i, model_output_dict in tqdm(
+            enumerate(model_outputs),
+            ncols=100,
+            total=len(marked_sents),
+            desc='[Feature] Generate train instances'
+        ):
             marked_sent = marked_sents[i]
             word_idxs = marked_sent['widxs']
             swidx2widx = {swidx: widx for widx, swidx in enumerate(word_idxs)}
-            swidx2widx.update({len(marked_sent['ids']): len(swidx2widx)})
+            swidx2widx[len(marked_sent['ids'])] = len(swidx2widx)  # boundary
 
+            # Positive spans
             for l_idx, r_idx in marked_sent['pos_spans']:
                 wl_idx, wr_idx = swidx2widx[l_idx], swidx2widx[r_idx + 1] - 1
                 spanlen = wr_idx - wl_idx + 1
                 if spanlen > consts.MAX_WORD_GRAM:
                     continue
-                assert spanlen > 0
 
-                positive_span_attentionmap = self._get_span_attenionmap(model_output_dict, l_idx, r_idx)
-                positive_instance = (1, spanlen, positive_span_attentionmap, marked_sent['ids'][l_idx: r_idx + 1])
-                train_instances.append(positive_instance)
+                positive_span_attentionmap = self._get_span_attenionmap(
+                    model_output_dict, l_idx, r_idx
+                )
+                positive_instance = (
+                    1,  # label
+                    spanlen,
+                    positive_span_attentionmap,
+                    marked_sent['ids'][l_idx : r_idx + 1]
+                )
+                positive_instances.append(positive_instance)
 
-            for negative_l_idx, negative_r_idx in marked_sent['neg_spans']:
-                negative_wl_idx, negative_wr_idx = swidx2widx[negative_l_idx], swidx2widx[negative_r_idx + 1] - 1
-                negative_spanlen = negative_wr_idx - negative_wl_idx + 1
-                negative_span_attentionmap = self._get_span_attenionmap(model_output_dict, negative_l_idx, negative_r_idx)
-                negative_instance = (0, negative_spanlen, negative_span_attentionmap, marked_sent['ids'][negative_l_idx: negative_r_idx + 1])
-                train_instances.append(negative_instance)
+            # Negative spans
+            for neg_l_idx, neg_r_idx in marked_sent['neg_spans']:
+                neg_wl_idx, neg_wr_idx = swidx2widx[neg_l_idx], swidx2widx[neg_r_idx + 1] - 1
+                neg_spanlen = neg_wr_idx - neg_wl_idx + 1
+
+                negative_span_attentionmap = self._get_span_attenionmap(
+                    model_output_dict, neg_l_idx, neg_r_idx
+                )
+                negative_instance = (
+                    0,  # label
+                    neg_spanlen,
+                    negative_span_attentionmap,
+                    marked_sent['ids'][neg_l_idx : neg_r_idx + 1]
+                )
+                negative_instances.append(negative_instance)
 
             del model_output_dict
 
-        utils.Pickle.dump(train_instances, path_output)
+        print(f"Collected {len(positive_instances):,} positive and {len(negative_instances):,} negative instances.")
+
+        # ---------------------------
+        # 5) Final Sampling to 5M
+        # ---------------------------
+        # We want 2.5M positive, 2.5M negative if possible
+        random.shuffle(positive_instances)
+        random.shuffle(negative_instances)
+
+        pos_keep = min(len(positive_instances), POS_TARGET)
+        neg_keep = min(len(negative_instances), NEG_TARGET)
+
+        final_pos = positive_instances[:pos_keep]
+        final_neg = negative_instances[:neg_keep]
+
+        final_instances = final_pos + final_neg
+        random.shuffle(final_instances)  # interleave positives & negatives
+
+        print(f"Final: {len(final_pos):,} positives + {len(final_neg):,} negatives = {len(final_instances):,} total.")
+
+        # ---------------------------
+        # 6) Save the Final Instances
+        # ---------------------------
+        utils.Pickle.dump(final_instances, path_output)
+        print(f"[Feature] Saved to {path_output}")
+
         return path_output
 
+    
     def generate_predict_docs(self, path_marked_corpus, max_num_docs=None):
         utils.Log.info(f'Generating prediction instances: {path_marked_corpus}')
         path_marked_corpus = Path(path_marked_corpus)

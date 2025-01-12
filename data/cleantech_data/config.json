@@ -1,0 +1,8 @@
+{
+    "lm_name": "roberta-base",
+    "path_train": "./standard/devdata.train.jsonl",
+    "path_test": "./standard/devdata.test.jsonl",
+    "path_phrase": "../wiki_quality.txt",
+    "path_stopwords": "../stopwords.txt",
+    "kp_num_candidates_per_doc": 10
+}

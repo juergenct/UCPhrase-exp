@@ -12,7 +12,7 @@ def parse_args():
     parser.add_argument("--dir_data", type=str, default='../data/devdata/')
     parser.add_argument("--exp_prefix", type=str, default='', help='additional exp name')
     parser.add_argument("--model_prefix", type=str, default='', help='additional model name')
-    parser.add_argument("--path_model_config", type=str, default='../configs/core.CNN.3layers.json')
+    parser.add_argument("--path_model_config", type=str, default='../configs/core.CNN.3layers.json') # Uses the core.CNN.3layers.json config file, instead of the wiki.emb.fix.json 
     args = parser.parse_args()
     return args
 
@@ -27,11 +27,11 @@ class DataConfig:
         self.path_test = dir_config / config_dict['path_test']
         self.path_train = dir_config / config_dict['path_train']
         self.path_phrase = dir_config / config_dict['path_phrase']
-        self.path_tagging_docs = dir_config / config_dict['path_tagging_docs']
-        self.paths_tagging_human = [dir_config / p for p in config_dict['paths_tagging_human']]
-        self.path_stem_test = dir_config / config_dict['path_stem_test']
-        self.path_stem_train = dir_config / config_dict['path_stem_train']
-        self.path_stem_doc2references = dir_config / config_dict['path_stem_doc2references']
+        # self.path_tagging_docs = dir_config / config_dict['path_tagging_docs'] # Not needed for inference only
+        # self.paths_tagging_human = [dir_config / p for p in config_dict['paths_tagging_human']] # Not needed for inference only
+        # self.path_stem_test = dir_config / config_dict['path_stem_test'] # Not needed for inference only
+        # self.path_stem_train = dir_config / config_dict['path_stem_train'] # Not needed for inference only
+        # self.path_stem_doc2references = dir_config / config_dict['path_stem_doc2references'] # Not needed for inference only
         self.dir_config = dir_config
         self.kp_num_candidates_per_doc = config_dict['kp_num_candidates_per_doc']
 
@@ -47,8 +47,8 @@ DIR_DATA = Path(ARGS.dir_data)
 PATH_DATA_CONFIG = DIR_DATA / 'config.json'
 DATA_CONFIG = DataConfig(PATH_DATA_CONFIG)
 PATH_MODEL_CONFIG = Path(ARGS.path_model_config)
-STEM_DOC2REFS = {doc: {g for g in golds if len(g.split()) > 1} for doc, golds in utils.Json.load(DATA_CONFIG.path_stem_doc2references).items()}
-DOCIDS_WITH_GOLD = {doc for doc, golds in STEM_DOC2REFS.items() if golds}  # Task 2 evaluation is performed on docs with gold keyphrases
+# STEM_DOC2REFS = {doc: {g for g in golds if len(g.split()) > 1} for doc, golds in utils.Json.load(DATA_CONFIG.path_stem_doc2references).items()} # Not needed for inference only
+# DOCIDS_WITH_GOLD = {doc for doc, golds in STEM_DOC2REFS.items() if golds}  # Task 2 evaluation is performed on docs with gold keyphrases # Not needed for inference only
 
 # huggingface LM
 GPT_TOKEN = 'Ġ'
@@ -56,7 +56,9 @@ LM_NAME = DATA_CONFIG.lm_name
 LM_NAME_SUFFIX = LM_NAME.split('/')[-1]
 DEVICE = utils.get_device(ARGS.gpu)
 LM_MODEL = transformers.RobertaModel.from_pretrained(LM_NAME).eval().to(DEVICE)
+# LM_MODEL = transformers.AutoModelForMaskedLM.from_pretrained(LM_NAME).eval().to(DEVICE) # Adjusted for Bert-for-Patents
 LM_TOKENIZER = transformers.RobertaTokenizerFast.from_pretrained(LM_NAME)
+# LM_TOKENIZER = transformers.AutoTokenizer.from_pretrained(LM_NAME) # Adjusted for Bert-for-Patents
 print(f'[consts] Loading pretrained model: {LM_NAME} OK!')
 
 # html visualization
@@ -66,11 +68,11 @@ HTML_EP = '</span>'
 # settings
 MAX_SENT_LEN = 64
 MAX_WORD_GRAM = 5
-MAX_SUBWORD_GRAM = 10
-NEGATIVE_RATIO = 1
+MAX_SUBWORD_GRAM = 10 # Maximum number of tokens in a subword gram
+NEGATIVE_RATIO = 1 # As many negative samples as positive samples
 
 # multiprocessing
-NUM_CORES = 16
+NUM_CORES = 16 # Setting for TIE Server 28 # Setting for HPC cluster
 torch.set_num_threads(NUM_CORES)
 
 

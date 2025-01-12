@@ -10,7 +10,7 @@ class Preprocessor:
     def __init__(
             self,
             path_corpus,
-            num_cores=8,
+            num_cores=16,
             use_cache=True):
         self.use_cache = use_cache
         self.num_cores = num_cores

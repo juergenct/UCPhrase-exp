@@ -101,9 +101,25 @@ class BaseModel(nn.Module):
         decoded_corpus.dump_html()
         return path_output
 
+    # @staticmethod
+    # def _par_get_doc_cands(predicted_doc, threshold, filter_punc=True):
+    #     cands = set()
+    #     for predicted_sent in predicted_doc['sents']:
+    #         tokens = consts.LM_TOKENIZER.convert_ids_to_tokens(predicted_sent['ids'])
+    #         predicted_spans = predicted_sent['spans']
+    #         for l_idx, r_idx, prob in predicted_spans:
+    #             if prob > threshold:
+    #                 cand = consts.roberta_tokens_to_str(tokens[l_idx: r_idx + 1])
+    #                 cand = utils.stem_cand(cand)
+    #                 if cand:
+    #                     cands.add(cand)
+    #     if filter_punc:
+    #         cands = {c for c in cands if not (c[0] in PUNCS or c[-1] in PUNCS)}
+
+    #     return list(cands)
     @staticmethod
     def _par_get_doc_cands(predicted_doc, threshold, filter_punc=True):
-        cands = set()
+        cands = {}
         for predicted_sent in predicted_doc['sents']:
             tokens = consts.LM_TOKENIZER.convert_ids_to_tokens(predicted_sent['ids'])
             predicted_spans = predicted_sent['spans']
@@ -112,11 +128,17 @@ class BaseModel(nn.Module):
                     cand = consts.roberta_tokens_to_str(tokens[l_idx: r_idx + 1])
                     cand = utils.stem_cand(cand)
                     if cand:
-                        cands.add(cand)
-        if filter_punc:
-            cands = {c for c in cands if not (c[0] in PUNCS or c[-1] in PUNCS)}
+                        if cand not in cands or prob > cands[cand]:
+                            cands[cand] = prob
 
-        return list(cands)
+        if filter_punc:
+            cands = {
+                c: p for c, p in cands.items()
+                if not (c[0] in PUNCS or c[-1] in PUNCS)
+            }
+
+        # Convert probabilities to native Python floats to avoid serialization error
+        return [(cand, float(prob)) for cand, prob in cands.items()]
 
     @ staticmethod
     def get_doc2cands(path_predicted_docs, output_dir, expected_num_cands_per_doc, use_cache, use_tqdm):
@@ -136,7 +158,8 @@ class BaseModel(nn.Module):
         for _ in range(20):
             threshold = (threshold_l + threshold_r) / 2
             doc2cands = {doc['_id_']: BaseModel._par_get_doc_cands(doc, threshold) for doc in to_iterate}
-            num_cands = [len(cands) for doc, cands in doc2cands.items() if doc in consts.DOCIDS_WITH_GOLD]
+            # num_cands = [len(cands) for doc, cands in doc2cands.items() if doc in consts.DOCIDS_WITH_GOLD] # This uses the global variable DOCIDS_WITH_GOLD, which should not be used in an unsupervised context
+            num_cands = [len(cands) for cands in doc2cands.values()]
             average_num_cands = utils.mean(num_cands)
             print(f'threshold={threshold:.3f} num_cands={average_num_cands}')
             if min_average_num_cands <= average_num_cands <= max_average_num_cands:

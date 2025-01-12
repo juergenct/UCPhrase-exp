@@ -6,6 +6,9 @@ import shutil
 from distutils.core import setup
 from Cython.Build import cythonize
 
+if not os.path.exists('./match'):
+    os.makedirs('./match')
+
 setup(name='keyword processor',
       ext_modules=cythonize("keywordprocessor.pyx"))
 

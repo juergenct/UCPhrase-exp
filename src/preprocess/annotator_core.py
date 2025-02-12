@@ -2,9 +2,11 @@ import utils
 import consts
 import string
 import functools
+import logging
+import gc
+import json
 from tqdm import tqdm
-from collections import Counter
-from collections import defaultdict
+from collections import Counter, defaultdict
 from preprocess.preprocess import Preprocessor
 from preprocess.annotator_base import BaseAnnotator
 
@@ -73,24 +75,72 @@ class CoreAnnotator(BaseAnnotator):
 
         return phrase2instances
 
-    def _mark_corpus(self):
-        tokenized_docs = utils.JsonLine.load(self.path_tokenized_corpus)
-        tokenized_id_docs = utils.JsonLine.load(self.path_tokenized_id_corpus)
-        phrase2instances_list = utils.Process.par(
-            func=CoreAnnotator._par_mine_doc_phrases,
-            iterables=list(zip(tokenized_docs, tokenized_id_docs)),
-            num_processes=consts.NUM_CORES,
-            desc='[CoreAnno] Mine phrases'
-        )
-        doc2phrases = dict()
-        for i_doc, doc in tqdm(list(enumerate(tokenized_id_docs)), ncols=100, desc='[CoreAnno] Tag docs'):
-            for s in doc['sents']:
-                s['phrases'] = []
-            phrase2instances = phrase2instances_list[i_doc]
-            doc2phrases[doc['_id_']] = list(phrase2instances.keys())
-            for phrase, instances in phrase2instances.items():
-                for i_sent, l_idx, r_idx in instances:
-                    doc['sents'][i_sent]['phrases'].append([[l_idx, r_idx], phrase])
-        utils.Json.dump(doc2phrases, self.dir_output / f'doc2phrases.{self.path_tokenized_corpus.stem}.json')
+    # def _mark_corpus(self):
+    #     tokenized_docs = utils.JsonLine.load(self.path_tokenized_corpus)
+    #     tokenized_id_docs = utils.JsonLine.load(self.path_tokenized_id_corpus)
+    #     phrase2instances_list = utils.Process.par(
+    #         func=CoreAnnotator._par_mine_doc_phrases,
+    #         iterables=list(zip(tokenized_docs, tokenized_id_docs)),
+    #         num_processes=consts.NUM_CORES,
+    #         desc='[CoreAnno] Mine phrases'
+    #     )
+    #     doc2phrases = dict()
+    #     for i_doc, doc in tqdm(list(enumerate(tokenized_id_docs)), ncols=100, desc='[CoreAnno] Tag docs'):
+    #         for s in doc['sents']:
+    #             s['phrases'] = []
+    #         phrase2instances = phrase2instances_list[i_doc]
+    #         doc2phrases[doc['_id_']] = list(phrase2instances.keys())
+    #         for phrase, instances in phrase2instances.items():
+    #             for i_sent, l_idx, r_idx in instances:
+    #                 doc['sents'][i_sent]['phrases'].append([[l_idx, r_idx], phrase])
+    #     utils.Json.dump(doc2phrases, self.dir_output / f'doc2phrases.{self.path_tokenized_corpus.stem}.json')
+    #     return tokenized_id_docs
 
-        return tokenized_id_docs
+    def _mark_corpus_partition(self, tokenized_path, tokenized_id_path, batch_size=200000):
+        """
+        Processes one partition (the pair of tokenized files) in batches.
+        Writes out the marked documents for this partition to a JSONL file.
+        Returns the file path of the marked output.
+        """
+        tokenized_docs = utils.JsonLine.load(tokenized_path)
+        tokenized_id_docs = utils.JsonLine.load(tokenized_id_path)
+        num_docs = len(tokenized_docs)
+        logging.info("Processing %d documents from partition %s", num_docs, tokenized_path.name)
+        
+        marked_corpus_path = self.dir_output / f'marked_docs.{tokenized_path.name}.jsonl'
+        doc2phrases_path = self.dir_output / f'doc2phrases.{tokenized_path.name}.jsonl'
+        
+        with open(marked_corpus_path, 'w') as f_marked, open(doc2phrases_path, 'w') as f_mapping:
+            for start in range(0, num_docs, batch_size):
+                end = min(num_docs, start + batch_size)
+                logging.info("Processing batch: %d to %d", start, end)
+                
+                docs_batch = tokenized_docs[start:end]
+                id_docs_batch = tokenized_id_docs[start:end]
+                
+                phrase2instances_list_batch = utils.Process.par(
+                    func=CoreAnnotator._par_mine_doc_phrases,
+                    iterables=list(zip(docs_batch, id_docs_batch)),
+                    num_processes=consts.NUM_CORES,
+                    desc=f'[CoreAnno] Mine phrases (Batch {start}-{end})'
+                )
+                
+                for i, doc in enumerate(id_docs_batch):
+                    for s in doc['sents']:
+                        s['phrases'] = []
+                    phrase2instances = phrase2instances_list_batch[i]
+                    doc_id = doc['_id_']
+                    # Write the per-document mapping to a separate file.
+                    f_mapping.write(json.dumps({doc_id: list(phrase2instances.keys())}) + "\n")
+                    for phrase, instances in phrase2instances.items():
+                        for i_sent, l_idx, r_idx in instances:
+                            doc['sents'][i_sent]['phrases'].append([[l_idx, r_idx], phrase])
+                    f_marked.write(json.dumps(doc) + "\n")
+                
+                f_marked.flush()
+                f_mapping.flush()
+                del docs_batch, id_docs_batch, phrase2instances_list_batch
+                gc.collect()
+        
+        logging.info("Finished processing partition: %s", tokenized_path.name)
+        return marked_corpus_path

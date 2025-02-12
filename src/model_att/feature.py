@@ -2,6 +2,8 @@ import utils
 import torch
 import consts
 import random
+import math
+import gc
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
@@ -89,145 +91,117 @@ class FeatureExtractor(BaseFeatureExtractor):
 
     #     utils.Pickle.dump(train_instances, path_output)
     #     return path_output
-    def generate_train_instances(self, path_sampled_docs, max_num_docs=None):
-        # ---------------------------        
-        # Desired final numbers
-        POS_TARGET = 2_500_000
-        NEG_TARGET = 2_500_000
+
+    def generate_train_instances(self, path_sampled_docs, max_num_docs=None, num_parts=100):
+        """
+        Processes the sampled training data from one or more files without merging them.
+        If a list of file paths is passed (e.g., one per partition), then for each file the
+        sentences are flattened and split into chunks. The total number of parts across all
+        partitions will be roughly `num_parts` (i.e. num_parts_per_partition = ceil(num_parts / num_partitions)).
         
-        utils.Log.info(f'Generating training instances: {path_sampled_docs}')
-        path_sampled_docs = Path(path_sampled_docs)
-        path_prefix = 'train.' + f'{max_num_docs}docs.' * (max_num_docs is not None)
-        path_output = (
-            self.output_dir
-            / path_sampled_docs.name.replace('sampled.', path_prefix)
-        ).with_suffix('.pk')
-
-        # Use cache if available
-        if self.use_cache and utils.IO.is_valid_file(path_output):
-            print(f'[Feature] Use cache: {path_output}')
-            return path_output
-
-        # ---------------------------
-        # 1) Load and Flatten
-        # ---------------------------
-        print(f'Loading: {path_sampled_docs}...', end='')
-        sampled_docs = utils.OrJsonLine.load(path_sampled_docs)
-        if max_num_docs is not None:
-            sampled_docs = sampled_docs[:max_num_docs]
-        print('OK!')
-
-        # Flatten out the sentences
-        marked_sents = [sent for doc in sampled_docs for sent in doc['sents']]
-        print(f"Total sentences available: {len(marked_sents):,}")
-
-        # ---------------------------
-        # 2) Shuffle and Subset Sentences
-        # ---------------------------
-        random.shuffle(marked_sents)
-
-        # We might not need all sentences if we only want 5M total instances.
-        # But we don't know how many each sentence will produce.
-        # Strategy: pick a subset that is "likely" to yield enough.
-        # E.g., pick top X% or a specific number of sents if you have a sense of yield.
-        # Here's a simple example: take at most 2 million sentences.
-        # Adjust as needed.
-        max_sents_for_processing = 2_000_000  # or some other cutoff
-        if len(marked_sents) > max_sents_for_processing:
-            marked_sents = marked_sents[:max_sents_for_processing]
-        print(f"Subsampled to {len(marked_sents):,} sentences (pre-process).")
-
-        # Sort sentences by length (descending) if desired (optional step).
-        # If you still want the sort-by-length property, do it now or skip it
-        marked_sents = sorted(marked_sents, key=lambda s: len(s['ids']), reverse=True)
-
-        # ---------------------------
-        # 3) Obtain Model Outputs
-        # ---------------------------
-        # We process only the (sub)sampled sentences
-        model_outputs = self._get_model_outputs(marked_sents)
-
-        # ---------------------------
-        # 4) Generate Pos/Neg Instances
-        # ---------------------------
-        positive_instances = []
-        negative_instances = []
-
-        for i, model_output_dict in tqdm(
-            enumerate(model_outputs),
-            ncols=100,
-            total=len(marked_sents),
-            desc='[Feature] Generate train instances'
-        ):
-            marked_sent = marked_sents[i]
-            word_idxs = marked_sent['widxs']
-            swidx2widx = {swidx: widx for widx, swidx in enumerate(word_idxs)}
-            swidx2widx[len(marked_sent['ids'])] = len(swidx2widx)  # boundary
-
-            # Positive spans
-            for l_idx, r_idx in marked_sent['pos_spans']:
-                wl_idx, wr_idx = swidx2widx[l_idx], swidx2widx[r_idx + 1] - 1
-                spanlen = wr_idx - wl_idx + 1
-                if spanlen > consts.MAX_WORD_GRAM:
-                    continue
-
-                positive_span_attentionmap = self._get_span_attenionmap(
-                    model_output_dict, l_idx, r_idx
-                )
-                positive_instance = (
-                    1,  # label
-                    spanlen,
-                    positive_span_attentionmap,
-                    marked_sent['ids'][l_idx : r_idx + 1]
-                )
-                positive_instances.append(positive_instance)
-
-            # Negative spans
-            for neg_l_idx, neg_r_idx in marked_sent['neg_spans']:
-                neg_wl_idx, neg_wr_idx = swidx2widx[neg_l_idx], swidx2widx[neg_r_idx + 1] - 1
-                neg_spanlen = neg_wr_idx - neg_wl_idx + 1
-
-                negative_span_attentionmap = self._get_span_attenionmap(
-                    model_output_dict, neg_l_idx, neg_r_idx
-                )
-                negative_instance = (
-                    0,  # label
-                    neg_spanlen,
-                    negative_span_attentionmap,
-                    marked_sent['ids'][neg_l_idx : neg_r_idx + 1]
-                )
-                negative_instances.append(negative_instance)
-
-            del model_output_dict
-
-        print(f"Collected {len(positive_instances):,} positive and {len(negative_instances):,} negative instances.")
-
-        # ---------------------------
-        # 5) Final Sampling to 5M
-        # ---------------------------
-        # We want 2.5M positive, 2.5M negative if possible
-        random.shuffle(positive_instances)
-        random.shuffle(negative_instances)
-
-        pos_keep = min(len(positive_instances), POS_TARGET)
-        neg_keep = min(len(negative_instances), NEG_TARGET)
-
-        final_pos = positive_instances[:pos_keep]
-        final_neg = negative_instances[:neg_keep]
-
-        final_instances = final_pos + final_neg
-        random.shuffle(final_instances)  # interleave positives & negatives
-
-        print(f"Final: {len(final_pos):,} positives + {len(final_neg):,} negatives = {len(final_instances):,} total.")
-
-        # ---------------------------
-        # 6) Save the Final Instances
-        # ---------------------------
-        utils.Pickle.dump(final_instances, path_output)
-        print(f"[Feature] Saved to {path_output}")
-
-        return path_output
-
+        Returns:
+            A list of file paths (one per chunk) containing the training instances.
+        """
+        utils.Log.info(f'Generating training instances in {num_parts} parts from {path_sampled_docs}')
+        
+        # Ensure path_sampled_docs is a list.
+        if not isinstance(path_sampled_docs, list):
+            path_sampled_docs = [path_sampled_docs]
+        
+        num_partitions = len(path_sampled_docs)
+        parts_per_partition = math.ceil(num_parts / num_partitions)
+        all_part_file_paths = []
+        
+        for partition_index, partition_path in enumerate(path_sampled_docs):
+            print(f'Loading partition file: {partition_path}')
+            sampled_docs = utils.OrJsonLine.load(partition_path)
+            if max_num_docs is not None:
+                sampled_docs = sampled_docs[:max_num_docs]
+            print('OK!')
+            
+            # Flatten the documents into sentences.
+            marked_sents = [sent for doc in sampled_docs for sent in doc['sents']]
+            utils.Log.info(f'Partition {partition_index}: Total sentences: {len(marked_sents):,}')
+            
+            # Optionally sort sentences by length.
+            marked_sents = sorted(marked_sents, key=lambda s: len(s['ids']), reverse=True)
+            total_sents = len(marked_sents)
+            chunk_size = math.ceil(total_sents / parts_per_partition)
+            
+            for chunk_idx in range(parts_per_partition):
+                start_idx = chunk_idx * chunk_size
+                end_idx = min(start_idx + chunk_size, total_sents)
+                if start_idx >= total_sents:
+                    break  # no more sentences in this partition
+                
+                chunk_sents = marked_sents[start_idx:end_idx]
+                utils.Log.info(f'[Partition {partition_index}, Chunk {chunk_idx}] Processing {len(chunk_sents):,} sentences...')
+                
+                # Obtain model outputs for this chunk.
+                model_outputs = self._get_model_outputs(chunk_sents)
+                
+                # Generate training instances for this chunk.
+                chunk_instances = []
+                for i, model_output_dict in tqdm(
+                    enumerate(model_outputs),
+                    ncols=100,
+                    total=len(chunk_sents),
+                    desc=f'[Feature] Gen Part {partition_index} Chunk {chunk_idx}'
+                ):
+                    marked_sent = chunk_sents[i]
+                    word_idxs = marked_sent['widxs']
+                    swidx2widx = {swidx: widx for widx, swidx in enumerate(word_idxs)}
+                    # Add boundary mapping.
+                    swidx2widx[len(marked_sent['ids'])] = len(swidx2widx)
+        
+                    # Process positive spans.
+                    for l_idx, r_idx in marked_sent['pos_spans']:
+                        wl_idx, wr_idx = swidx2widx[l_idx], swidx2widx[r_idx + 1] - 1
+                        spanlen = wr_idx - wl_idx + 1
+                        if spanlen > consts.MAX_WORD_GRAM:
+                            continue
+                        positive_span_attentionmap = self._get_span_attenionmap(model_output_dict, l_idx, r_idx)
+                        pos_instance = (
+                            1,
+                            spanlen,
+                            positive_span_attentionmap,
+                            marked_sent['ids'][l_idx: r_idx + 1]
+                        )
+                        chunk_instances.append(pos_instance)
+        
+                    # Process negative spans.
+                    for neg_l_idx, neg_r_idx in marked_sent['neg_spans']:
+                        neg_wl_idx, neg_wr_idx = swidx2widx[neg_l_idx], swidx2widx[neg_r_idx + 1] - 1
+                        neg_span_attentionmap = self._get_span_attenionmap(model_output_dict, neg_l_idx, neg_r_idx)
+                        neg_spanlen = neg_wr_idx - neg_wl_idx + 1
+                        neg_instance = (
+                            0,
+                            neg_spanlen,
+                            neg_span_attentionmap,
+                            marked_sent['ids'][neg_l_idx: neg_r_idx + 1]
+                        )
+                        chunk_instances.append(neg_instance)
+        
+                    # Cleanup for the current model output.
+                    del model_output_dict
+        
+                utils.Log.info(f'[Partition {partition_index}, Chunk {chunk_idx}] Generated {len(chunk_instances):,} instances.')
+        
+                # Optional shuffling.
+                random.shuffle(chunk_instances)
+        
+                # Build a file name that includes partition and chunk indices.
+                part_file_path = self.output_dir / f"train.partition{partition_index}_chunk{chunk_idx}.pk"
+                utils.Pickle.dump(chunk_instances, part_file_path)
+                all_part_file_paths.append(part_file_path)
+                utils.Log.info(f'[Partition {partition_index}, Chunk {chunk_idx}] Saved to {part_file_path}')
+        
+                # Clean up to free memory.
+                del chunk_sents, model_outputs, chunk_instances
+                gc.collect()
+        
+        utils.Log.info(f'[Feature] Done. Created {len(all_part_file_paths)} chunk files.')
+        return all_part_file_paths
     
     def generate_predict_docs(self, path_marked_corpus, max_num_docs=None):
         utils.Log.info(f'Generating prediction instances: {path_marked_corpus}')

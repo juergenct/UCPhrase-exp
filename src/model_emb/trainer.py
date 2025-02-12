@@ -19,7 +19,7 @@ class EmbedTrainer:
         model_config_path = self.output_dir / 'model_config.json'
         utils.Json.dump(self.model.config, model_config_path)
 
-    def train(self, path_sampled_train_data, num_epochs=20):
+    def train(self, path_sampled_train_data, num_epochs=5):
         sampled_docs = utils.JsonLine.load(path_sampled_train_data)
         marked_sents = [sent for doc in sampled_docs for sent in doc['sents']]
         marked_sents = sorted(marked_sents, key=lambda s: len(s['ids']), reverse=True)

@@ -9,7 +9,8 @@ from functools import lru_cache
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=str, default=None)
-    parser.add_argument("--dir_data", type=str, default='../data/devdata/')
+    # parser.add_argument("--dir_data", type=str, default='/mnt/nvme01/UCPhrase_JT/data/devdata/')
+    parser.add_argument("--dir_data", type=str, default='/fibus/fs1/0f/cyh1826/wt/ucphrase/data/devdata/') # TUHH HPC
     parser.add_argument("--exp_prefix", type=str, default='', help='additional exp name')
     parser.add_argument("--model_prefix", type=str, default='', help='additional model name')
     parser.add_argument("--path_model_config", type=str, default='../configs/core.CNN.3layers.json') # Uses the core.CNN.3layers.json config file, instead of the wiki.emb.fix.json 
@@ -24,9 +25,9 @@ class DataConfig:
         dir_config = path_config_json.parent
 
         self.lm_name = config_dict['lm_name']
-        self.path_test = dir_config / config_dict['path_test']
-        self.path_train = dir_config / config_dict['path_train']
-        self.path_phrase = dir_config / config_dict['path_phrase']
+        self.path_test = [dir_config / p for p in config_dict['path_test']] if isinstance(config_dict['path_test'], list) else (dir_config / config_dict['path_test'])
+        self.path_train = [dir_config / p for p in config_dict['path_train']] if isinstance(config_dict['path_train'], list) else (dir_config / config_dict['path_train'])
+        self.path_phrase = [dir_config / p for p in config_dict['path_phrase']] if isinstance(config_dict['path_phrase'], list) else (dir_config / config_dict['path_phrase'])
         # self.path_tagging_docs = dir_config / config_dict['path_tagging_docs'] # Not needed for inference only
         # self.paths_tagging_human = [dir_config / p for p in config_dict['paths_tagging_human']] # Not needed for inference only
         # self.path_stem_test = dir_config / config_dict['path_stem_test'] # Not needed for inference only
@@ -72,7 +73,7 @@ MAX_SUBWORD_GRAM = 10 # Maximum number of tokens in a subword gram
 NEGATIVE_RATIO = 1 # As many negative samples as positive samples
 
 # multiprocessing
-NUM_CORES = 16 # Setting for TIE Server 28 # Setting for HPC cluster
+NUM_CORES = 16 
 torch.set_num_threads(NUM_CORES)
 
 
